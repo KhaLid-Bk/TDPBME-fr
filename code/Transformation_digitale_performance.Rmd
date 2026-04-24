@@ -1,0 +1,339 @@
+---
+title: "Transformation digitale et performance boursière : Modélisation économétrique"
+author: "BOUKHIT KHALID"
+date: "2025-05-22"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+<!-- ============================================================
+     Transformation digitale et performance boursière
+     Auteur : BOUKHIT KHALID (2025)
+     Contact : khalid.boukhit01@gmail.com
+     ============================================================ -->
+
+# Chargement des bibliothèques
+
+```{r, warning=FALSE, message=FALSE}
+suppressPackageStartupMessages({
+  library(readr); library(FactoMineR); library(ggplot2); library(dplyr)
+  library(explor); library(plm); library(ggrepel); library(scales)
+  library(car); library(plotly); library(lme4); library(sampleSelection)
+  library(lmtest); library(sandwich); library(censReg); library(lfe)
+  library(stargazer); library(quantreg); library(dynlm); library(ivreg)
+  library(caret); library(AER); library(mediation); library(nnet)
+  library(rdrobust); library(mgcv); library(survival); library(survminer)
+  library(interactions); library(broom); library(viridis)
+})
+```
+
+# Chargement des données
+
+```{r}
+TP <- read_csv(file.choose())
+TP$Secteur <- as.factor(TP$Secteur)
+TP$year <- as.factor(TP$year)
+```
+
+# Indice de Maturité Digitale (MD)
+
+Construction de l'indice composite MD par Analyse en Composantes Principale (ACP).
+
+```{r}
+dfMD <- TP[, c("id", "year", "engagementDirection", "Competences", "Automatisation",
+               "AdoptionTech", "CoutsOperationnels", "InvestissementDigital")]
+res.pca <- PCA(dfMD[, 3:8], graph = FALSE)
+res.pca$eig
+TP$MD <- res.pca$ind$coord[, 1]
+TP <- TP %>% mutate(MD = scales::rescale(MD, to = c(0, 100)))
+ggplot(TP, aes(x = MD)) +
+  geom_histogram(fill = "blue", bins = 30) +
+  labs(title = "Distribution de l'indice de maturité digitale",
+       x = "Indice de maturité digitale",
+       y = "Nombre d'entreprises")
+```
+
+# Indice de Performance Boursière (PB)
+
+Construction de l'indice composite PB par ACP avec pondération par la variance expliquée.
+
+```{r}
+dfPB <- TP[, c("id", "year", "CapitalSocial", "CapitauxPropres", "CA", "BPA",
+               "ROE", "DividendYield", "PER", "ROA")]
+res.pca.performance <- PCA(dfPB[, 3:10], graph = FALSE)
+SOMMECUMULE <- cumsum(res.pca.performance$eig[, "percentage of variance"])
+nbcomposante <- which(SOMMECUMULE >= 80)[1]
+cat("Nombre de composantes nécessaires pour expliquer au moins 80 % de la variance :", nbcomposante, "\n")
+poid <- res.pca.performance$eig[1:nbcomposante, "percentage of variance"] /
+        sum(res.pca.performance$eig[1:nbcomposante, "percentage of variance"])
+TP$PB <- as.vector(res.pca.performance$ind$coord[, 1:nbcomposante] %*% poid)
+TP <- TP %>% mutate(PB = scales::rescale(PB, to = c(0, 100)))
+```
+
+# Statistiques Descriptives
+
+```{r}
+summary(TP$MD); summary(TP$PB)
+mean(TP$MD); mean(TP$PB); sd(TP$MD); sd(TP$PB)
+r <- cor(TP$PB, TP$MD, method = "pearson")
+print(paste("Le coefficient de corrélation est", r))
+summary(TP)
+hist(TP$Age, main = "Distribution de l'âge", xlab = "Âge")
+hist(TP$collaborateurs, main = "Distribution des collaborateurs", xlab = "Collaborateurs")
+hist(TP$CA, main = "Distribution du chiffre d'affaires", xlab = "Chiffre d'affaires")
+hist(TP$ResponsableDigitale, main = "Distribution des responsables digitaux",
+     xlab = "Présence d'un Responsable Digital")
+```
+
+# Structure de Données de Panel
+
+```{r}
+pdata <- pdata.frame(TP)
+pdatana <- na.omit(pdata)
+```
+
+# H1 : Maturité Digitale → Performance Boursière
+
+*Les entreprises cotées ayant une maturité digitale élevée génèrent de meilleures performances boursières.*
+
+```{r}
+rg <- lm(PB ~ MD, TP); summary(rg)
+par(mfrow = c(2, 2)); plot(rg)
+residus <- residuals(rg); qq <- data.frame(residus = residus)
+ggplot(qq, aes(sample = residus)) + stat_qq() + stat_qq_line(col = "red") +
+  ggtitle("QQ Plot des Résidus") + theme_minimal()
+shapiro.test(resid(rg))
+bptest(rg)
+fitted_values <- fitted(rg); std_residuals <- sqrt(abs(scale(residuals(rg))))
+scalloc <- data.frame(Fitted = fitted_values, StdResiduals = std_residuals)
+ggplot(scalloc, aes(x = Fitted, y = StdResiduals)) +
+  geom_point(alpha = 0.6) + geom_smooth(method = "loess", color = "red", se = FALSE) +
+  ggtitle("Graphique Scale-Location des Résidus") +
+  xlab("Valeurs ajustées") + ylab("√(|Résidus standardisés|)") + theme_minimal()
+durbinWatsonTest(rg)
+```
+
+### Régressions sur données de panel
+
+```{r}
+Reg.pH1 <- plm(PB ~ MD, pdata, model = "pooling"); summary(Reg.pH1)
+Reg.bH1 <- update(Reg.pH1, model = "between"); summary(Reg.bH1)
+Reg.wH1 <- update(Reg.pH1, model = "within"); summary(Reg.wH1)
+Reg.rH1 <- update(Reg.pH1, model = "random"); summary(Reg.rH1)
+pFtest(Reg.wH1, Reg.pH1)
+phtest(Reg.wH1, Reg.rH1)
+resid <- residuals(Reg.pH1); shapiro.test(resid)
+bptest(Reg.pH1)
+pwartest(Reg.wH1)
+```
+
+### Spécifications alternatives
+
+```{r}
+poole <- plm(log(PB + 0.01) ~ log(MD + 0.01), pdata, model = "pooling"); summary(poole)
+withh <- plm(log(PB + 0.01) ~ log(MD + 0.01), pdata, model = "within"); summary(withh)
+pFtest(withh, poole)
+regtobitH1 <- censReg(PB ~ MD, data = pdata); summary(regtobitH1)
+dynamicH1 <- dynlm(PB ~ L(MD, 1), data = pdata); summary(dynamicH1)
+```
+
+### Validation croisée et variables instrumentales
+
+```{r}
+trainingH1 <- trainControl(method = "cv", number = 10)
+moddedH1 <- train(PB ~ MD, data = pdata, method = "lm", trControl = trainingH1); summary(moddedH1)
+modelH1IV <- ivreg(PB ~ MD | lag(MD), data = pdata); summary(modelH1IV)
+first_stage <- lm(MD ~ lag(MD), data = TP)
+fs_fstat <- summary(first_stage)$fstatistic[1]
+names(fs_fstat) <- "First-stage F-statistic"; print(fs_fstat)
+```
+
+### Modèle de Mundlak et GAM
+
+```{r}
+pdata <- pdata %>% group_by(id) %>% mutate(MD_mean = mean(MD)) %>% ungroup()
+mundlak_model <- plm(PB ~ MD + MD_mean, data = pdata, model = "random"); summary(mundlak_model)
+gam_model <- gam(PB ~ s(MD) + MD, data = TP); summary(gam_model)
+```
+
+# H2 : Investissement Digital → Ratio Cours/Valeur Comptable (PBR)
+
+*Le niveau d'investissement digital influence positivement le PBR.*
+
+```{r}
+rh2 <- lm(PBR ~ InvestissementDigital + ROE, TP); summary(rh2)
+par(mfrow = c(2, 2)); plot(rh2)
+diag_data <- augment(rh2)
+ggplot(diag_data, aes(.fitted, .resid)) + geom_point() +
+  geom_hline(yintercept = 0, color = "red") + theme_minimal() +
+  labs(title = "Résidus vs valeurs ajustées", x = "Valeurs ajustées", y = "Résidus")
+ggplot(diag_data, aes(.fitted, sqrt(abs(.resid)))) + geom_point() + theme_minimal() +
+  labs(title = "Échelle des résidus (homoscédasticité)",
+       x = "Valeurs ajustées", y = "√|Résidus|")
+ggplot(diag_data, aes(sample = .resid)) + stat_qq() + stat_qq_line(color = "red") +
+  theme_minimal() + labs(title = "QQ-plot des résidus",
+                         x = "Quantiles théoriques", y = "Quantiles des résidus")
+```
+
+### Spécification log-log
+
+```{r}
+rh2log <- lm(log(PBR + 0.01) ~ InvestissementDigital + log(ROE + 0.01), TP); summary(rh2log)
+diag_data <- augment(rh2log)
+ggplot(diag_data, aes(.fitted, .resid)) + geom_point() +
+  geom_hline(yintercept = 0, color = "red") + theme_minimal() +
+  labs(title = "Résidus vs valeurs ajustées", x = "Valeurs ajustées", y = "Résidus")
+ggplot(diag_data, aes(.fitted, sqrt(abs(.resid)))) + geom_point() + theme_minimal() +
+  labs(title = "Échelle des résidus", x = "Valeurs ajustées", y = "√|Résidus|")
+ggplot(diag_data, aes(sample = .resid)) + stat_qq() + stat_qq_line(color = "red") +
+  theme_minimal() + labs(title = "QQ-plot des résidus")
+bptest(rh2log); coeftest(rh2log, vcov = vcovHC(rh2log, type = "HC3"))
+```
+
+### Modèle de panel
+
+```{r}
+poolingsh2 <- plm(PBR ~ InvestissementDigital + ROE, pdata, model = "pooling"); summary(poolingsh2)
+bp_test <- bptest(poolingsh2); print(bp_test)
+bg_test <- pbgtest(poolingsh2); print(bg_test)
+robust_coef_cluster <- coeftest(poolingsh2, vcov = vcovHC(poolingsh2, type = "HC3", cluster = "group"))
+print(robust_coef_cluster)
+```
+
+# H3 : Digitalisation → Dividendes Plus Élevés
+
+*Les dividendes versés sont plus élevés dans les entreprises cotées digitalisées.*
+
+```{r}
+poolingH3 <- plm(log(Dividendes + 0.01) ~ MD + collaborateurs, pdata, model = "pooling")
+summary(poolingH3)
+betweensh3 <- update(poolingH3, model = "between"); summary(betweensh3)
+withinsh3 <- update(poolingH3, model = "within"); summary(withinsh3)
+randomsh3 <- update(poolingH3, model = "random"); summary(randomsh3)
+pFtest(withinsh3, poolingH3)
+phtest(withinsh3, randomsh3)
+tobitsh3 <- tobit(log(Dividendes) ~ MD + DividendYield, data = pdata, left = 0)
+summary(tobitsh3)
+```
+
+### Analyse de discontinuité de régression
+
+```{r}
+rdplot(log(pdata$Dividendes + 0.01), pdata$MD,
+       c = quantile(pdata$MD, 0.75),
+       title = "Effet de seuil de maturité digitale",
+       x.label = "Score MD", y.label = "Dividende")
+```
+
+# H4 : L'Impact de la MD varie selon les Secteurs
+
+*L'impact de la MD sur la PB varie selon les secteurs.*
+
+```{r}
+poolingH4 <- plm(PB ~ MD + factor(Secteur) + Age + collaborateurs,
+                 pdata, model = "pooling"); summary(poolingH4)
+betweenh4 <- update(poolingH4, model = "between"); summary(betweenh4)
+withinh4 <- update(poolingH4, model = "within"); summary(withinh4)
+randomh4 <- update(poolingH4, model = "random"); summary(randomh4)
+pFtest(withinh4, poolingH4)
+phtest(withinh4, randomh4)
+```
+
+### Modèle dynamique et Tobit
+
+```{r}
+dynamicH4 <- dynlm(PB ~ L(MD, 1) + factor(Secteur) + Age, data = pdata)
+summary(dynamicH4)
+polyH4 <- lm(PB ~ MD + factor(Secteur) + Age + poly(year, 2), data = pdata)
+summary(polyH4)
+tobitH4 <- tobit(PB ~ MD + factor(Secteur), data = pdata, left = 0)
+summary(tobitH4)
+```
+
+# H5 : L'Âge Modère l'Effet de la Digitalisation
+
+*Les entreprises anciennes bénéficient moins de la digitalisation que les jeunes.*
+
+```{r}
+poolregh5 <- plm(PB ~ MD + Age + MD * Age, pdata, model = "pooling")
+summary(poolregh5)
+betweenreg5 <- update(poolregh5, model = "between"); summary(betweenreg5)
+withinreg5 <- update(poolregh5, model = "within"); summary(withinreg5)
+randomreg5 <- update(poolregh5, model = "random"); summary(randomreg5)
+pFtest(withinreg5, poolregh5)
+tobitH5 <- censReg(PB ~ MD + Age, data = pdata); summary(tobitH5)
+dynH5 <- dynlm(PB ~ L(MD, 1) + Age, data = pdata); summary(dynH5)
+```
+
+### Test de non-linéarité (GAM)
+
+```{r}
+model_gam5 <- gam(PB ~ s(MD, by = Age), data = pdata); summary(model_gam5)
+```
+
+### Analyse de survie
+
+```{r}
+model_cox <- coxph(Surv(Age, ifelse(pdata$AdoptionTech > median(pdata$AdoptionTech), 1, 0)) ~ MD,
+                   data = pdata)
+summary(model_cox)
+ggsurvplot(survfit(model_cox), data = pdata, risk.table = TRUE)
+```
+
+### Visualisation de l'interaction
+
+```{r}
+model_gam5 <- gam(PB ~ s(MD, by = Age) + MD + Age, data = pdata); summary(model_gam5)
+data_grid <- expand.grid(
+  MD = seq(min(pdata$MD), max(pdata$MD), length.out = 100),
+  Age = quantile(pdata$Age, probs = c(0.1, 0.5, 0.9))
+)
+ggplot(data_grid, aes(x = MD, y = predict(model_gam5, newdata = data_grid),
+                       color = factor(Age))) +
+  geom_line(linewidth = 1.2) +
+  scale_color_viridis(discrete = TRUE, name = "Âge de l'entreprise",
+    labels = c("Jeune (10e percentile)", "Moyen (50e percentile)", "Âgée (90e percentile)")) +
+  labs(title = "Effet interactif de la maturité digitale (MD) et de l'âge\nsur la performance boursière (PB)",
+       x = "Score de maturité digitale (MD)",
+       y = "Performance boursière prédite (PB)",
+       caption = "Les lignes représentent la relation MD-PB à différents niveaux d'âge.") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"), legend.position = "bottom")
+```
+
+# Analyse : Présence d'un Responsable Digital
+
+```{r}
+dyn <- dynlm(PB ~ ResponsableDigitale + collaborateurs, data = pdata); summary(dyn)
+ggplot(pdata, aes(x = ResponsableDigitale, y = PB)) + geom_point(alpha = 0.6) +
+  geom_jitter(width = 0.1) +
+  stat_summary(fun = mean, geom = "point", color = "red", size = 4) +
+  labs(title = "Relation entre Responsable Digital et Performance Boursière",
+       x = "Présence d'un Responsable Digital (0 = Non, 1 = Oui)",
+       y = "Performance Boursière (PB)") + theme_minimal()
+ggplot(pdata, aes(x = factor(ResponsableDigitale), y = PB)) +
+  geom_boxplot(fill = "lightblue", alpha = 0.6) +
+  labs(title = "Distribution de la Performance Boursière selon la Présence\nd'un Responsable Digital",
+       x = "Présence d'un Responsable Digital (0 = Non, 1 = Oui)",
+       y = "Performance Boursière (PB)") + theme_minimal()
+ggplot(pdata, aes(x = ResponsableDigitale, y = PB)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = FALSE, color = "blue") +
+  labs(title = "Effet d'un Responsable Digital sur la Performance Boursière",
+       x = "Présence d'un Responsable Digital (0 = Non, 1 = Oui)",
+       y = "Performance Boursière (PB)") + theme_minimal()
+ggplot(pdata, aes(x = collaborateurs, y = PB, color = factor(ResponsableDigitale))) +
+  geom_point(alpha = 0.6) + geom_smooth(method = "lm", se = FALSE) +
+  scale_color_manual(values = c("red", "blue"),
+                     labels = c("Sans Responsable Digital", "Avec Responsable Digital")) +
+  labs(title = "Relation entre Collaborateurs, Responsable Digital\net Performance Boursière",
+       x = "Nombre de Collaborateurs",
+       y = "Performance Boursière (PB)",
+       color = "Présence d'un Responsable Digital") + theme_minimal()
+```

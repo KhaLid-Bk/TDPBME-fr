@@ -1,0 +1,90 @@
+---
+title: "Analyse Exploratoire des Données"
+author: "BOUKHIT KHALID"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+<!-- Analyse exploratoire des données -->
+
+```{r}
+suppressPackageStartupMessages({
+  library(readr); library(FactoMineR); library(ggplot2); library(dplyr)
+  library(plm); library(scales); library(viridis); library(tidyr)
+})
+
+# Chargement des données
+TP <- read_csv(file.choose())
+TP$Secteur <- as.factor(TP$Secteur)
+TP$year <- as.factor(TP$year)
+```
+
+# Vue d'Ensemble du Jeu de Données
+
+```{r}
+cat("Dimensions du jeu de données :", nrow(TP), "lignes x", ncol(TP), "colonnes\n")
+cat("Nombre d'entreprises :", length(unique(TP$id)), "\n")
+cat("Années :", paste(sort(unique(TP$year)), collapse = ", "), "\n")
+cat("Secteurs :", nlevels(TP$Secteur), "\n\n")
+```
+
+# Distribution par Secteur
+
+```{r}
+g1 <- ggplot(TP, aes(x = Secteur)) +
+  geom_bar(fill = "#1f77b4", alpha = 0.7) +
+  coord_flip() +
+  labs(title = "Observations par Secteur", x = "", y = "Nombre") +
+  theme_minimal()
+g1
+```
+
+
+# Distribution de l'Âge des Entreprises
+
+```{r}
+g2 <- ggplot(TP, aes(x = Age)) +
+  geom_histogram(fill = "#ff7f0e", bins = 20, alpha = 0.7) +
+  labs(title = "Distribution de l'Âge des Entreprises", x = "Âge (années)", y = "Nombre") +
+  theme_minimal()
+g2
+```
+
+# Composantes de la Maturité Digitale par Secteur
+
+```{r}
+md_vars <- c("engagementDirection", "Competences", "Automatisation",
+             "AdoptionTech", "CoutsOperationnels", "InvestissementDigital")
+TP_long <- TP %>%
+  select(Secteur, all_of(md_vars)) %>%
+  pivot_longer(cols = all_of(md_vars), names_to = "Variable", values_to = "Score")
+
+g3 <- ggplot(TP_long, aes(x = Variable, y = Score, fill = Secteur)) +
+  geom_boxplot(alpha = 0.7) +
+  labs(title = "Composantes de la Maturité Digitale par Secteur", x = "", y = "Score (1-5)") +
+  theme_minimal() + theme(axis.text.x = element_text(angle = 45, hjust = 1),
+                          legend.position = "bottom")
+g3
+```
+
+# Résumé des Variables Financières
+
+```{r}
+fin_vars <- c("CA", "ROE", "ROA", "PER", "PBR", "DividendYield")
+cat("\nRésumé des Variables Financières :\n")
+print(summary(TP[, fin_vars]))
+```
+
+# Matrice de Corrélation (Composantes MD)
+
+```{r}
+cor_mat <- cor(TP[, md_vars], use = "complete.obs")
+cat("\nMatrice de Corrélation (Composantes MD) :\n")
+print(round(cor_mat, 2))
+```
